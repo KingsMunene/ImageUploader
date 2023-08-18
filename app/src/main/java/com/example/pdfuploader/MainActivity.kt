@@ -8,13 +8,23 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -24,6 +34,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,14 +42,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.tooling.preview.Preview
+
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import com.example.pdfuploader.models.OnlineNotes
+import com.example.pdfuploader.sealed.DataState
 import com.example.pdfuploader.ui.theme.PdfUploaderTheme
+import com.example.pdfuploader.viewmodel.OnlineNotesViewModel
 import com.google.firebase.database.ktx.database
 import com.google.firebase.ktx.Firebase
 import com.google.firebase.storage.ktx.storage
-import java.net.URL
+
 
 class MainActivity : ComponentActivity() {
 
@@ -49,6 +67,11 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var progressDialog: ProgressDialog
 
+
+    // Activity result launcher
+    /**
+    * This variable is used to get a file from the instance opened
+     * */
     private val imageLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()){
             result ->
         if (result.resultCode == RESULT_OK) {
@@ -64,6 +87,8 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "Canceled", Toast.LENGTH_LONG).show()
         }
     }
+
+    val viewModel: OnlineNotesViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,8 +108,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        fun uploadPdfIntoDb(uploadedPdfUrl: String, fileName: String, courseSelection: String) {
 
+        fun uploadPdfIntoDb(uploadedPdfUrl: Uri, fileName: String, courseSelection: String) {
             progressDialog.setMessage("Uploading PDF info...")
             progressDialog.show()
 
@@ -92,11 +117,11 @@ class MainActivity : ComponentActivity() {
             val pdfData = HashMap<String, Any>()
 
             pdfData["name"] = fileName
-            pdfData["url"] = "$uploadedPdfUrl"
-            pdfData["course"] = courseSelection
+            pdfData["unit"] = "$uploadedPdfUrl.pdf"
+            pdfData["category"] = courseSelection
 
-            dataBaseReference.child(courseSelection).
-            child(fileName)
+            dataBaseReference.child("Units").
+            child(timeStamp.toString())
                 .setValue(pdfData).addOnSuccessListener{
                     progressDialog.dismiss()
                     // Saved successfully
@@ -122,7 +147,7 @@ class MainActivity : ComponentActivity() {
                             // Get url of uploaded pdf
                             val urlTask = taskSnapshot.storage.downloadUrl
                             while (!urlTask.isSuccessful);
-                            val uploadedPdfUrl = "${urlTask.result}"
+                            val uploadedPdfUrl = urlTask.result
 
                             // Call the function to save the pdf information to the database
                             uploadPdfIntoDb(uploadedPdfUrl, fileName, courseSelected)
@@ -138,6 +163,8 @@ class MainActivity : ComponentActivity() {
                 Toast.makeText(this, e.toString(), Toast.LENGTH_SHORT).show()
             }
         }
+
+
         setContent {
             PdfUploaderTheme {
                 // A surface container using the 'background' color from the theme
@@ -166,30 +193,149 @@ class MainActivity : ComponentActivity() {
                        }
                     }
 
+                    val navController: NavHostController = rememberNavController()
+
+                    var selectedFileUrl: String? = null
+
+                    NavHost(
+                        navController = navController,
+                        startDestination = "Start"
+                    ){
 
 
+                        composable(route = "Start"){
+                            AppUi(
+                                startIntent = { startIntent() },
 
-                    AppUi(
-                        startIntent = { startIntent() },
-
-                        uploadImage = {
-                            validateData()
+                                uploadImage = {
+                                    validateData()
+                                },
+                                onNewFileName = {fileName = it},
+                                fileName = fileName,
+                                isExpanded = isExpanded,
+                                courseName =courseName,
+                                onExpanded = {isExpanded = it},
+                                onItemClick = {
+                                        selectedName, state -> courseName = selectedName
+                                    isExpanded = state
+                                },
+                                onDismissRequest = {currentState -> isExpanded = !currentState},
+                                fetchData = {
+                                    navController.navigate("fetchData")
+                                }
+                            )
                         }
 
-                        ,
-                        onNewFileName = {fileName = it},
-                        fileName = fileName,
-                        isExpanded = isExpanded,
-                        courseName =courseName,
-                        onExpanded = {isExpanded = it},
-                        onItemClick = {
-                                selectedName, state -> courseName = selectedName
-                            isExpanded = state
-                        },
-                        onDismissRequest = {currentState -> isExpanded = !currentState}
-                    )
+                        composable("fetchData"){
+                            setData(viewModel = viewModel,
+                                openUnit = {url -> selectedFileUrl = url
+                                    navController.navigate("pdfViewer")}
+                                )
+                        }
+
+                        composable("pdfViewer"){
+                            PdfViewer(selectedFileUrl = selectedFileUrl!!)
+                        }
+                    }
+
+
                 }
             }
+        }
+
+    
+    }
+}
+
+@Composable
+fun CourseItem(
+    course: OnlineNotes,
+    openUnit: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(10.dp)
+            .clickable(
+                onClick = openUnit
+            )
+    ){
+        Box(modifier = Modifier
+            .fillMaxSize()
+        ){
+            Text(
+                text = course.name!!,
+                fontSize = MaterialTheme.typography.headlineMedium.fontSize,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+            )
+        }
+    }
+}
+
+
+@Composable
+fun ShowCourseList(
+    data: MutableList<OnlineNotes>,
+    openUnit: (String) -> Unit
+) {
+    LazyColumn{
+        items(data){ course ->
+            CourseItem(course, openUnit = {openUnit(course.unit!!)})
+
+        }
+    }
+}
+
+@Composable
+fun setData(
+    viewModel: OnlineNotesViewModel,
+    openUnit: (String) -> Unit
+){
+    when (val result = viewModel.response.value){
+        DataState.Loading -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ){
+                CircularProgressIndicator()
+            }
+
+        }
+        is DataState.Success ->  {
+            ShowCourseList(
+                result.data,
+                openUnit = {
+                        unitUrl -> openUnit(unitUrl)
+                }
+            )
+
+        }
+        is DataState.Failure -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ){
+                Text(
+                    text = result.message,
+                    fontSize = MaterialTheme.typography.headlineMedium.fontSize
+                )
+            }
+
+        }
+        else -> {
+
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ){
+                Text(
+                    text = "Error Fetching data",
+                    fontSize = MaterialTheme.typography.headlineMedium.fontSize
+                )
+            }
+
         }
     }
 }
@@ -205,7 +351,8 @@ fun AppUi(
     courseName: String,
     onExpanded: (Boolean) -> Unit,
     onItemClick: (String, Boolean) -> Unit,
-    onDismissRequest: (Boolean) -> Unit
+    onDismissRequest: (Boolean) -> Unit,
+    fetchData: () -> Unit
 ){
 
     Column(
@@ -278,7 +425,7 @@ fun AppUi(
             }
 
             Button(
-                onClick = {}
+                onClick = fetchData
             ){
                 Text(text = "Get Data")
             }
